@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mesh Lighting Study — Desktop Web (Aspect-Correct Side Panel + Colour-Temperature Lighting)</title>
+  <style>
+    :root { color-scheme: dark; --panel: rgba(14,17,24,.92); --line: rgba(255,255,255,.15); --text:#f3f5f8; --muted:#a9b2c1; --accent:#66b8ff; }
+    html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#0f1117; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:var(--text); }
+    /* The canvas is a real left-hand viewport, not a full-screen canvas hidden behind the panel. */
+    canvas { position:fixed; inset:0 auto 0 0; width:calc(100vw - 390px); height:100vh; display:block; }
+    .overlay { position:fixed; inset:0; display:grid; place-items:center; z-index:10; background:linear-gradient(130deg, rgba(7,10,17,.92), rgba(15,20,31,.82)); padding:24px; overflow-y:auto; }
+    .card { width:min(680px, 92vw); padding:28px; border:1px solid var(--line); border-radius:16px; background:var(--panel); box-shadow:0 18px 70px rgba(0,0,0,.38); margin:24px 0; }
+    h1 { margin:0 0 8px; font-size:clamp(1.45rem,4vw,2.15rem); line-height:1.15; }
+    h2 { font-size:1.05rem; margin:18px 0 8px; }
+    p, li { color:var(--muted); line-height:1.45; }
+    ul { padding-left:20px; }
+    label { display:block; color:var(--muted); font-size:.88rem; margin:16px 0 6px; }
+    input, select { width:100%; box-sizing:border-box; background:#0b0e14; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font:inherit; }
+    .field-row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    @media (max-width:520px) { .field-row { grid-template-columns:1fr; } }
+    button { font:inherit; cursor:pointer; border:1px solid var(--line); color:var(--text); background:#202633; border-radius:9px; padding:10px 15px; }
+    button:hover:not(:disabled) { border-color:#8bc9ff; }
+    button:disabled { cursor:not-allowed; opacity:.45; }
+    .primary { background:#1576be; border-color:#5fb8fb; font-weight:700; }
+    .footer { margin-top:16px; font-size:.78rem; color:#8893a5; }
+    #hud { position:fixed; top:14px; left:14px; z-index:3; display:none; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:rgba(12,15,22,.76); backdrop-filter:blur(8px); font-size:.88rem; }
+    #status { color:var(--muted); margin-top:3px; }
+    /* Desktop: rating controls are outside the rendering viewport, never on top of the mesh. */
+    #question { position:fixed; right:0; top:0; bottom:0; left:auto; transform:none; width:390px; box-sizing:border-box; display:none; z-index:4; padding:24px 18px; border:0; border-left:1px solid var(--line); border-radius:0; background:var(--panel); box-shadow:-12px 0 36px rgba(0,0,0,.24); overflow-y:auto; }
+    #questionTitle { margin:0 0 8px; font-weight:700; }
+    #questionHint { margin:0 0 12px; color:var(--muted); font-size:.9rem; }
+    .rating-row { display:grid; grid-template-columns:repeat(7, 1fr); gap:8px; margin-bottom:11px; }
+    .rating-row button { min-height:40px; padding:7px 0; }
+    .rating-row button.selected { border-color:#9fd5ff; background:#176eab; box-shadow:0 0 0 1px #9fd5ff inset; }
+    .anchors { display:flex; justify-content:space-between; color:var(--muted); font-size:.75rem; margin-top:-7px; margin-bottom:8px; }
+    .measure { color:#dce8f5; font-size:.86rem; margin:10px 0 6px; }
+    .actions { display:flex; justify-content:flex-end; gap:9px; margin-top:8px; }
+    .hidden { display:none!important; }
+    /* On compact screens, retain a compact bottom sheet because there is no usable side column. */
+    @media (max-width:899px) {
+      canvas { width:100vw; }
+      #question { left:50%; right:auto; top:auto; bottom:0; transform:translateX(-50%); width:min(720px, 100vw); max-height:48vh; padding:14px 16px; border:1px solid var(--line); border-bottom:0; border-radius:14px 14px 0 0; box-shadow:0 -10px 32px rgba(0,0,0,.28); }
+    }
+    @media (max-width:520px) { .card{padding:21px}.rating-row{gap:5px}.rating-row button{font-size:.9rem} }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+
+  <div id="intro" class="overlay">
+    <div class="card">
+      <h1>Mesh Lighting Study</h1>
+      <p>This desktop study measures how lighting affects the perceived readability and visual quality of 3D meshes.</p>
+      <h2>Instructions</h2>
+      <ul>
+        <li>Use left-drag to orbit, right-drag to pan, and the wheel to zoom.</li>
+        <li>Inspect each mesh freely, then rate it on two seven-point scales.</li>
+        <li>Keep display brightness and room lighting unchanged during the session.</li>
+        <li>The study is local: responses remain in this browser until you export the CSV.</li>
+      </ul>
+      <label for="participant">Anonymous participant ID (optional)</label>
+      <input id="participant" maxlength="48" autocomplete="off" placeholder="e.g., P042">
+
+      <div class="field-row">
+        <div>
+          <label for="age">Age (optional)</label>
+          <input id="age" type="number" min="0" max="120" step="1" autocomplete="off" placeholder="e.g., 29">
+        </div>
+        <div>
+          <label for="gender">Gender (optional)</label>
+          <select id="gender">
+            <option value="">Prefer not to say</option>
+            <option value="woman">Woman</option>
+            <option value="man">Man</option>
+            <option value="nonbinary">Non-binary</option>
+            <option value="self-describe">Self-describe</option>
+          </select>
+        </div>
+      </div>
+      <div id="genderSelfDescribeWrap" class="hidden">
+        <label for="genderSelfDescribe">Please self-describe</label>
+        <input id="genderSelfDescribe" maxlength="60" autocomplete="off" placeholder="Your description">
+      </div>
+
+      <div class="actions" style="margin-top:18px"><button id="start" class="primary">Start randomized study</button></div>
+      <p class="footer">24 trials · 12 meshes × 2 lighting conditions per participant · balanced across four lighting designs. Demographic fields are optional and stored only in your exported CSV.</p>
+    </div>
+  </div>
+
+  <div id="completion" class="overlay hidden">
+    <div class="card">
+      <h1>Session complete</h1>
+      <p id="completionText">Your responses are ready for export.</p>
+      <div class="actions"><button id="export" class="primary">Download CSV</button><button id="restart">Start a new randomized session</button></div>
+      <p class="footer">Save the CSV immediately; this page does not upload or persist results.</p>
+    </div>
+  </div>
+
+  <div id="hud"><strong id="trialLabel"></strong><div id="status">Preparing study…</div></div>
+
+  <section id="question" aria-live="polite">
+    <p id="questionTitle">Rate this mesh</p>
+    <p id="questionHint">Base your response on the current lighting presentation.</p>
+    <div class="measure">1. How clearly can you judge the mesh's surface shape?</div>
+    <div id="shapeRow" class="rating-row"></div>
+    <div class="anchors"><span>1 · Very unclear</span><span>7 · Very clear</span></div>
+    <div class="measure">2. How high is this mesh's overall visual quality?</div>
+    <div id="qualityRow" class="rating-row"></div>
+    <div class="anchors"><span>1 · Very low</span><span>7 · Very high</span></div>
+    <div class="actions"><button id="next" class="primary" disabled>Next trial</button></div>
+  </section>
+
+  <script async src="https://unpkg.com/es-module-shims@1.10.0/dist/es-module-shims.js"></script>
+  <script type="importmap">
+    { "imports": {
+      "three": "https://unpkg.com/three@0.159.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.159.0/examples/jsm/"
+    }}
+  </script>
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
+
+    // ---------- Pre-registered stimulus specification ----------
+    const MESHES = [
+      { id:"a1", file:"a1.obj" }, { id:"a2", file:"a2.obj" }, { id:"a3", file:"a3.obj" },
+      { id:"a4", file:"a4.obj" }, { id:"a5", file:"a5.obj" }, { id:"a6", file:"a6.obj" },
+      { id:"s1l", file:"s1l.obj" }, { id:"s1m", file:"s1m.obj" }, { id:"s1r", file:"s1r.obj" },
+      { id:"s2l", file:"s2l.obj" }, { id:"s2m", file:"s2m.obj" }, { id:"s2r", file:"s2r.obj" }
+    ];
+    // Conditions manipulate lighting design (direction, contrast, and a subtle warm/cool spectral balance).
+    // Names are stored in the CSV but are not shown to participants.
+    const LIGHTS = {
+      diffuse:  { label:"Neutral diffuse / low contrast" },
+      frontal:  { label:"Warm frontal key / low shadow" },
+      raking:   { label:"Cool raking key / high shape contrast" },
+      studio:   { label:"Warm–cool three-point studio" }
+    };
+    // Every participant sees each mesh exactly twice. The six unordered pairs are
+    // assigned twice, so each lighting condition occurs exactly 6 times in 24 trials.
+    const LIGHT_PAIRS = [
+      ["diffuse","frontal"], ["diffuse","raking"], ["diffuse","studio"],
+      ["frontal","raking"], ["frontal","studio"], ["raking","studio"]
+    ];
+    const PLATFORM = "web";
+    const MODEL_HEIGHT = 2.35; // world units; fixed after asset-normalization
+    const USE_VERTEX_COLORS = true; // Preserve the OBJ v x y z r g b appearance; lighting remains the manipulated factor.
+
+    // ---------- Reproducible randomized schedule ----------
+    function cryptoSeed() {
+      const a = new Uint32Array(1);
+      crypto.getRandomValues(a);
+      return a[0] >>> 0;
+    }
+    function mulberry32(seed) {
+      return function() {
+        let t = seed += 0x6D2B79F5;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    function shuffle(arr, rand) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+    function avoidAdjacentSameMesh(items, rand) {
+      for (let pass=0; pass<40; pass++) {
+        let fixed = true;
+        for (let i=1; i<items.length; i++) {
+          if (items[i].mesh.id === items[i-1].mesh.id) {
+            const candidates = [];
+            for (let j=i+1; j<items.length; j++) {
+              if (items[j].mesh.id !== items[i-1].mesh.id &&
+                  (j===items.length-1 || items[j-1].mesh.id !== items[i].mesh.id)) candidates.push(j);
+            }
+            if (candidates.length) {
+              const j = candidates[Math.floor(rand()*candidates.length)];
+              [items[i], items[j]] = [items[j], items[i]];
+              fixed = false;
+            }
+          }
+        }
+        if (items.every((x,i)=> i===0 || x.mesh.id !== items[i-1].mesh.id)) return items;
+        if (fixed) shuffle(items, rand);
+      }
+      return items;
+    }
+    function buildTrials(seed) {
+      const rand = mulberry32(seed);
+      const meshes = shuffle([...MESHES], rand);
+      const pairRotation = seed % LIGHT_PAIRS.length;
+      const trials = [];
+      meshes.forEach((mesh, i) => {
+        const pair = LIGHT_PAIRS[(Math.floor(i / 2) + pairRotation) % LIGHT_PAIRS.length];
+        pair.forEach(light => trials.push({ mesh, light }));
+      });
+      shuffle(trials, rand);
+      avoidAdjacentSameMesh(trials, rand);
+      return trials.map((t, index) => ({ ...t, ordinal:index + 1 }));
+    }
+
+    // ---------- Three.js scene ----------
+    const canvas = document.querySelector("#c");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, powerPreference:"high-performance" });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x171b22);
+    scene.fog = new THREE.Fog(0x171b22, 10, 22);
+
+    const camera = new THREE.PerspectiveCamera(44, window.innerWidth/window.innerHeight, 0.05, 40);
+    camera.position.set(0, 2.0, 6.0);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.075;
+    controls.minDistance = 3.0;
+    controls.maxDistance = 8.5;
+    controls.minPolarAngle = 0.30;
+    controls.maxPolarAngle = 2.65;
+    controls.target.set(0, 1.12, 0);
+    controls.update();
+
+    const stage = new THREE.Group();
+    scene.add(stage);
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(18, 18),
+      new THREE.MeshStandardMaterial({ color:0x262b34, roughness:0.91, metalness:0 })
+    );
+    floor.rotation.x = -Math.PI/2;
+    floor.receiveShadow = true;
+    stage.add(floor);
+    const backWall = new THREE.Mesh(
+      new THREE.PlaneGeometry(18, 8),
+      new THREE.MeshStandardMaterial({ color:0x20252e, roughness:1, metalness:0 })
+    );
+    backWall.position.set(0, 4.0, -4.7);
+    backWall.receiveShadow = true;
+    stage.add(backWall);
+    const pedestal = new THREE.Mesh(
+      new THREE.CylinderGeometry(.92, 1.03, .13, 64),
+      new THREE.MeshStandardMaterial({ color:0x424953, roughness:.72, metalness:.04 })
+    );
+    pedestal.position.y = .065;
+    pedestal.receiveShadow = true;
+    stage.add(pedestal);
+    const stimulusRoot = new THREE.Group();
+    stimulusRoot.position.y = .13;
+    stage.add(stimulusRoot);
+
+    const target = new THREE.Object3D();
+    target.position.set(0, 1.1, 0);
+    scene.add(target);
+    const hemi = new THREE.HemisphereLight(0xdde9ff, 0x1e2430, 0.5);
+    const ambient = new THREE.AmbientLight(0xffffff, 0.15);
+    scene.add(hemi, ambient);
+    function makeDirectional() {
+      const l = new THREE.DirectionalLight(0xffffff, 0);
+      l.target = target;
+      l.shadow.mapSize.set(1024,1024);
+      l.shadow.camera.near = .1;
+      l.shadow.camera.far = 20;
+      l.shadow.camera.left = -4;
+      l.shadow.camera.right = 4;
+      l.shadow.camera.top = 4;
+      l.shadow.camera.bottom = -4;
+      scene.add(l);
+      return l;
+    }
+    const key = makeDirectional(), fill = makeDirectional(), rim = makeDirectional();
+
+    function setLight(light, x, y, z, intensity, castsShadow=false, color=0xffffff) {
+      light.position.set(x,y,z);
+      light.intensity = intensity;
+      light.visible = intensity > 0;
+      light.castShadow = castsShadow;
+      light.color.setHex(color);
+    }
+    function applyLighting(name) {
+      // All meshes keep their vertex RGB. Lighting is deliberately only mildly chromatic:
+      // approximately warm key / cool fill and rim relationships, not saturated colour effects.
+      // Camera, stage, material, tone mapping, exposure, and stimulus pose remain fixed.
+      hemi.intensity = 0;
+      ambient.intensity = 0;
+      hemi.color.setHex(0xdde9ff);
+      hemi.groundColor.setHex(0x1e2430);
+      ambient.color.setHex(0xffffff);
+      setLight(key,0,0,0,0);
+      setLight(fill,0,0,0,0);
+      setLight(rim,0,0,0,0);
+      if (name === "diffuse") {
+        hemi.color.setHex(0xe8f1ff);       // soft daylight blue
+        hemi.groundColor.setHex(0x2b232c); // faint warm bounce
+        hemi.intensity = 1.22;
+        ambient.color.setHex(0xffeee2);
+        ambient.intensity = .40;
+      } else if (name === "frontal") {
+        hemi.intensity = .34;
+        ambient.color.setHex(0xffeee2);
+        ambient.intensity = .12;
+        setLight(key, 0, 4.3, 6.0, 2.30, true, 0xffdfbf);  // warm key
+        setLight(fill,-3.5, 2.3, 4.7, .58, false, 0xcfe6ff); // cool fill
+      } else if (name === "raking") {
+        hemi.intensity = .17;
+        ambient.color.setHex(0xffeee2);
+        ambient.intensity = .06;
+        setLight(key,-5.2, 3.8, 2.2, 3.28, true, 0xc9e8ff); // cool grazing key
+        setLight(fill, 3.1, 2.0, 1.5, .22, false, 0xffd8bb); // restrained warm bounce
+        setLight(rim, 2.6, 5.0,-3.4, .34, false, 0xdfd6ff);  // subtle separation
+      } else if (name === "studio") {
+        hemi.intensity = .27;
+        ambient.color.setHex(0xffeee2);
+        ambient.intensity = .08;
+        setLight(key, 4.2, 5.5, 4.6, 2.56, true, 0xffdfbf);   // warm key
+        setLight(fill,-4.0, 3.0, 3.2, .62, false, 0xcfe7ff);  // cool fill
+        setLight(rim,-3.0, 5.6,-4.0, 1.42, false, 0xe0d7ff);  // lavender rim
+      }
+    }
+
+    // ---------- Asset loading and normalization ----------
+    const loader = new OBJLoader();
+    const meshCache = new Map();
+    function materialize(obj) {
+      obj.traverse(child => {
+        if (!child.isMesh) return;
+        if (!child.geometry.attributes.normal) child.geometry.computeVertexNormals();
+
+        // Three.js OBJLoader maps the OBJ's v x y z r g b data to geometry.attributes.color.
+        // White is intentional: MeshStandardMaterial multiplies white by the supplied per-vertex RGB,
+        // preserving the mesh's baked colour variation instead of tinting it with a flat material.
+        const hasVertexColors = USE_VERTEX_COLORS && !!child.geometry.attributes.color;
+        child.material = new THREE.MeshStandardMaterial({
+          color: hasVertexColors ? 0xffffff : 0xd8d1c8,
+          roughness:.64,
+          metalness:0.0,
+          vertexColors:hasVertexColors,
+          flatShading:false
+        });
+        child.castShadow = true;
+        child.receiveShadow = true;
+      });
+      obj.updateMatrixWorld(true);
+      const initial = new THREE.Box3().setFromObject(obj);
+      const size = initial.getSize(new THREE.Vector3());
+      const scale = MODEL_HEIGHT / Math.max(size.y, .0001);
+      obj.scale.setScalar(scale);
+      obj.updateMatrixWorld(true);
+      const normalized = new THREE.Box3().setFromObject(obj);
+      const center = normalized.getCenter(new THREE.Vector3());
+      obj.position.x -= center.x;
+      obj.position.z -= center.z;
+      obj.position.y -= normalized.min.y;
+      obj.updateMatrixWorld(true);
+      return obj;
+    }
+    function getMesh(mesh) {
+      if (meshCache.has(mesh.id)) return Promise.resolve(meshCache.get(mesh.id));
+      return new Promise((resolve,reject) => {
+        loader.load(mesh.file, object => {
+          const normalized = materialize(object);
+          meshCache.set(mesh.id, normalized);
+          resolve(normalized);
+        }, undefined, err => reject(new Error(`Could not load ${mesh.file}. Serve this folder through HTTP and keep every OBJ alongside this HTML.`)));
+      });
+    }
+    function clearStimulus() {
+      while (stimulusRoot.children.length) stimulusRoot.remove(stimulusRoot.children[0]);
+    }
+    function resetView() {
+      camera.position.set(0,2.0,6.0);
+      controls.target.set(0,1.12,0);
+      controls.update();
+    }
+
+    // ---------- Response collection ----------
+    const intro = document.querySelector("#intro");
+    const completion = document.querySelector("#completion");
+    const participantInput = document.querySelector("#participant");
+    const ageInput = document.querySelector("#age");
+    const genderSelect = document.querySelector("#gender");
+    const genderSelfDescribeWrap = document.querySelector("#genderSelfDescribeWrap");
+    const genderSelfDescribeInput = document.querySelector("#genderSelfDescribe");
+    const trialLabel = document.querySelector("#trialLabel");
+    const status = document.querySelector("#status");
+    const hud = document.querySelector("#hud");
+    const question = document.querySelector("#question");
+    const shapeRow = document.querySelector("#shapeRow");
+    const qualityRow = document.querySelector("#qualityRow");
+    const nextButton = document.querySelector("#next");
+    const startButton = document.querySelector("#start");
+    const exportButton = document.querySelector("#export");
+    const restartButton = document.querySelector("#restart");
+
+    genderSelect.addEventListener("change", () => {
+      genderSelfDescribeWrap.classList.toggle("hidden", genderSelect.value !== "self-describe");
+    });
+
+    function resolveGender() {
+      const v = genderSelect.value;
+      if (!v) return "";
+      if (v === "self-describe") return genderSelfDescribeInput.value.trim() || "self-describe";
+      return v;
+    }
+    function resolveAge() {
+      const raw = ageInput.value.trim();
+      if (!raw) return "";
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : "";
+    }
+
+    let state = { seed:null, participantId:"", age:"", gender:"", trials:[], trialIndex:0, records:[], startedAt:"", active:false, token:0, trialStartedAt:0, ratings:{shape:null,quality:null} };
+
+    function makeScale(row, key) {
+      for (let n=1;n<=7;n++) {
+        const b=document.createElement("button");
+        b.textContent=String(n); b.type="button";
+        b.addEventListener("click",()=>chooseRating(key,n));
+        row.appendChild(b);
+      }
+    }
+    makeScale(shapeRow,"shape"); makeScale(qualityRow,"quality");
+    function chooseRating(key,n) {
+      state.ratings[key]=n;
+      const row = key==="shape" ? shapeRow : qualityRow;
+      [...row.children].forEach((b,i)=>b.classList.toggle("selected", i+1===n));
+      nextButton.disabled = !(state.ratings.shape && state.ratings.quality);
+    }
+    function setQuestionVisible(show) { question.style.display = show ? "block" : "none"; }
+    function csvEscape(value) {
+      const s=String(value ?? "");
+      return /[",\n]/.test(s) ? `"${s.replaceAll('"','""')}"` : s;
+    }
+    function exportCSV() {
+      const columns = ["participant_id","age","gender","platform","session_seed","session_started_iso","trial_index","mesh_id","mesh_file","light_condition","shape_clarity_1_7","visual_quality_1_7","response_time_ms","timestamp_iso","screen_width","screen_height","user_agent"];
+      const rows = [columns.join(",")].concat(state.records.map(r=>columns.map(c=>csvEscape(r[c])).join(",")));
+      const blob = new Blob([rows.join("\n")],{type:"text/csv;charset=utf-8"});
+      const a=document.createElement("a");
+      a.href=URL.createObjectURL(blob);
+      a.download=`mesh-lighting-${state.participantId || "anonymous"}-${state.seed}.csv`;
+      a.click();
+      setTimeout(()=>URL.revokeObjectURL(a.href),500);
+    }
+    function finishStudy() {
+      state.active=false;
+      setQuestionVisible(false);
+      hud.style.display="none";
+      document.querySelector("#completionText").textContent = `Recorded ${state.records.length} randomized trials. Download the CSV before closing this page.`;
+      completion.classList.remove("hidden");
+    }
+    async function showTrial() {
+      if (!state.active) return;
+      if (state.trialIndex >= state.trials.length) { finishStudy(); return; }
+      const token=++state.token;
+      const trial=state.trials[state.trialIndex];
+      setQuestionVisible(false);
+      state.ratings={shape:null,quality:null}; nextButton.disabled=true;
+      shapeRow.querySelectorAll("button").forEach(b=>b.classList.remove("selected"));
+      qualityRow.querySelectorAll("button").forEach(b=>b.classList.remove("selected"));
+      trialLabel.textContent=`Trial ${trial.ordinal} of ${state.trials.length}`;
+      status.textContent=`Loading mesh ${trial.mesh.id}…`;
+      clearStimulus();
+      resetView();
+      applyLighting(trial.light);
+      try {
+        const mesh=await getMesh(trial.mesh);
+        if (!state.active || token !== state.token) return;
+        stimulusRoot.add(mesh.clone(true));
+        status.textContent="Inspect the mesh, then rate the current presentation.";
+        state.trialStartedAt=performance.now();
+        setQuestionVisible(true);
+      } catch(err) {
+        status.textContent=err.message;
+        const retry=document.createElement("button");
+        retry.textContent="Retry loading"; retry.className="primary";
+        retry.style.marginTop="8px";
+        retry.onclick=()=>{ retry.remove(); showTrial(); };
+        hud.appendChild(retry);
+      }
+    }
+    function advanceTrial() {
+      const trial=state.trials[state.trialIndex];
+      if (!trial || !state.ratings.shape || !state.ratings.quality) return;
+      state.records.push({
+        participant_id:state.participantId, age:state.age, gender:state.gender, platform:PLATFORM, session_seed:state.seed,
+        session_started_iso:state.startedAt, trial_index:trial.ordinal, mesh_id:trial.mesh.id,
+        mesh_file:trial.mesh.file, light_condition:trial.light,
+        shape_clarity_1_7:state.ratings.shape, visual_quality_1_7:state.ratings.quality,
+        response_time_ms:Math.round(performance.now()-state.trialStartedAt),
+        timestamp_iso:new Date().toISOString(), screen_width:window.innerWidth, screen_height:window.innerHeight,
+        user_agent:navigator.userAgent
+      });
+      state.trialIndex++;
+      showTrial();
+    }
+    function startStudy() {
+      state = {
+        seed:cryptoSeed(), participantId:participantInput.value.trim() || `anon-${Date.now().toString(36)}`,
+        age:resolveAge(), gender:resolveGender(),
+        trials:[], trialIndex:0, records:[], startedAt:new Date().toISOString(), active:true,
+        token:0, trialStartedAt:0, ratings:{shape:null,quality:null}
+      };
+      state.trials=buildTrials(state.seed);
+      intro.classList.add("hidden"); completion.classList.add("hidden"); hud.style.display="block";
+      showTrial();
+    }
+    startButton.addEventListener("click",startStudy);
+    nextButton.addEventListener("click",advanceTrial);
+    exportButton.addEventListener("click",exportCSV);
+    restartButton.addEventListener("click",()=>{ completion.classList.add("hidden"); intro.classList.remove("hidden"); });
+
+    renderer.setAnimationLoop(() => {
+      controls.update();
+      renderer.render(scene,camera);
+    });
+    // Match the projection to the actual CSS canvas rectangle. This prevents horizontal
+    // stretching when the side panel changes the visible viewport width.
+    function resizeRenderer() {
+      const rect = canvas.getBoundingClientRect();
+      const width = Math.max(1, Math.round(rect.width));
+      const height = Math.max(1, Math.round(rect.height));
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+      renderer.setSize(width, height, false);
+    }
+    const canvasResizeObserver = new ResizeObserver(resizeRenderer);
+    canvasResizeObserver.observe(canvas);
+    resizeRenderer();
+    window.addEventListener("resize", resizeRenderer);
+  </script>
+</body>
+</html>
